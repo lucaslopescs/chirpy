@@ -1,9 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
+	"strings"
 	"sync/atomic"
 )
 
@@ -44,6 +47,76 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(http.StatusText(http.StatusOK)))
 }
 
+type chirp struct {
+	Body string `json:"body"`
+}
+
+func handleChirpsValidate(w http.ResponseWriter, r *http.Request) {
+
+	decoder := json.NewDecoder(r.Body)
+	chirps := chirp{}
+	err := decoder.Decode(&chirps)
+
+	if err != nil {
+		log.Printf("Error decoding chirps: %s", err)
+		respondWithError(w, 400, err.Error())
+		return
+	}
+	if len(chirps.Body) > 140 {
+		respondWithError(w, 400, "Chirp is too long")
+		return
+	}
+	type resp struct {
+		Cleaned_body string `json:"cleaned_body"`
+	}
+	res := resp{
+		Cleaned_body: profanFilter(chirps.Body),
+	}
+	respondWithJSON(w, 200, res)
+}
+
+func respondWithError(w http.ResponseWriter, code int, msg string) {
+	type errorResponse struct {
+		Error string `json:"error"`
+	}
+	responseError := errorResponse{
+		Error: msg,
+	}
+	respondWithJSON(w, code, responseError)
+
+}
+
+func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("Error marshalling JSON %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	w.Write(data)
+}
+
+func profanFilter(chirps string) string {
+	naughtyWords := []string{"kerfuffle", "sharbert", "fornax"}
+	var cleanChirp []string
+
+	chirpSlice := strings.Fields(chirps)
+	for i := 0; i < len(chirpSlice); i++ {
+		if slices.Contains(naughtyWords, strings.ToLower(chirpSlice[i])) {
+			cleanChirp = append(cleanChirp, "****")
+			continue
+		}
+		cleanChirp = append(cleanChirp, chirpSlice[i])
+
+	}
+	cleanChirpString := strings.Join(cleanChirp, " ")
+	return cleanChirpString
+
+}
+
 func main() {
 	const filepathRoot = "."
 	const port = "8080"
@@ -61,6 +134,7 @@ func main() {
 	mux.HandleFunc("GET /api/healthz", handler)
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handleMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.handleReset)
+	mux.HandleFunc("POST /api/validate_chirp", handleChirpsValidate)
 
 	srv := &http.Server{
 		Addr:    ":" + port,
